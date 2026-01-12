@@ -13,11 +13,17 @@ from dotenv import load_dotenv
 
 def create_spark_session():
     """Создает сессию Spark"""
+    # Получаем абсолютный путь к JAR файлу
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    jar_path = os.path.join(project_root, 'lib', 'postgresql-42.7.4.jar')
+
     return SparkSession.builder \
         .appName("HH Vacancies Processor") \
         .config("spark.driver.extraJavaOptions", "-Dfile.encoding=UTF-8") \
         .config("spark.executor.extraJavaOptions", "-Dfile.encoding=UTF-8") \
-        .config("spark.jars", "lib/postgresql-42.7.4.jar") \
+        .config("spark.jars", jar_path) \
+        .config("spark.sql.broadcastTimeout", "600") \
         .getOrCreate()
 
 def extract_skills(key_skills):
@@ -85,27 +91,41 @@ def normalize_salary(salary_data):
 
 def main(input_file):
     """Основная функция обработки"""
+    print(f"Запуск spark_processor.py с файлом: {input_file}")
+
     if not os.path.exists(input_file):
         print(f"Файл не найден: {input_file}")
         return
-    
-    print(f"Обработка файла: {input_file}")
-    
-    # Загружаем переменные окружения (если файл существует)
-    env_path = '.env'
+
+    print(f"Файл найден, начинаем обработку: {input_file}")
+
+    # Загружаем переменные окружения в начале
+    env_path = '../.env'
     if os.path.exists(env_path):
         load_dotenv(env_path)
-    
+        print(f"Загружены переменные окружения из {env_path}")
+    else:
+        print(f"Файл .env не найден по пути {env_path}")
+
+    # Проверяем и устанавливаем переменные окружения
+    db_host = os.getenv('DB_HOST', 'localhost')
+    db_port = os.getenv('DB_PORT', '9301')
+    db_name = os.getenv('DB_NAME', 'hh_vacancies')
+    db_user = os.getenv('DB_USER', 'postgres')
+    db_password = os.getenv('DB_PASSWORD', 'postgres')
+
+    print(f"БД параметры: host={db_host}, port={db_port}, db={db_name}, user={db_user}")
+
     # Создаем сессию Spark
     spark = create_spark_session()
-    
+
     # Читаем JSON файл
     with open(input_file, 'r', encoding='utf-8') as f:
         data = json.load(f)
-    
+
     # Создаем RDD и преобразуем в DataFrame
     rdd = spark.sparkContext.parallelize(data)
-    
+
     # Определяем схему
     schema = StructType([
         StructField("id", StringType(), True),
@@ -124,13 +144,13 @@ def main(input_file):
         ])), True),
         StructField("published_at", StringType(), True)
     ])
-    
+
     df = spark.createDataFrame(rdd, schema=schema)
-    
+
     # Регистрируем UDF
     extract_skills_udf = F.udf(extract_skills, F.ArrayType(StringType()))
     normalize_salary_udf = F.udf(normalize_salary, IntegerType())
-    
+
     # Преобразуем данные
     processed_df = df.select(
         F.col("id").alias("vacancy_id"),
@@ -142,21 +162,23 @@ def main(input_file):
         F.to_date(F.col("published_at")).alias("published_date"),
         F.current_timestamp().alias("processed_at")
     ).filter(F.col("vacancy_id").isNotNull())
-    
+
     # Выводим статистику
     print("Статистика обработки:")
     print(f"Всего вакансий: {processed_df.count()}")
     print(f"Вакансий с зарплатой: {processed_df.filter(F.col('salary_rub').isNotNull()).count()}")
-    
+
     processed_df.show(10, truncate=False)
-    
+
     # Записываем в PostgreSQL
-    db_url = f"jdbc:postgresql://{os.getenv('DB_HOST', 'localhost')}:{os.getenv('DB_PORT', '5432')}/{os.getenv('DB_NAME', 'hh_vacancies')}"
+    db_url = f"jdbc:postgresql://{db_host}:{db_port}/{db_name}"
     db_properties = {
-        "user": os.getenv("DB_USER", "postgres"),
-        "password": os.getenv("DB_PASSWORD", "postgres"),
+        "user": db_user,
+        "password": db_password,
         "driver": "org.postgresql.Driver"
     }
+
+    print(f"Подключение к БД: {db_url} как {db_user}")
     
     print(f"Запись данных в PostgreSQL: {db_url}")
 
@@ -169,12 +191,14 @@ def main(input_file):
     # Выполняем UPSERT через прямое подключение к PostgreSQL
     import psycopg2
 
+    print(f"psycopg2 подключение: host={db_host}, port={db_port}, db={db_name}, user={db_user}")
+
     conn = psycopg2.connect(
-        host=os.getenv('DB_HOST', 'localhost'),
-        port=os.getenv('DB_PORT', '5432'),
-        database=os.getenv('DB_NAME', 'hh_vacancies'),
-        user=os.getenv('DB_USER', 'postgres'),
-        password=os.getenv('DB_PASSWORD', 'postgres')
+        host=db_host,
+        port=int(db_port),
+        database=db_name,
+        user=db_user,
+        password=db_password
     )
 
     try:

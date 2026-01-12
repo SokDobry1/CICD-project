@@ -6,6 +6,7 @@
 import os
 from pyspark.sql import SparkSession, functions as F
 from dotenv import load_dotenv
+from pyspark.sql import functions as F
 
 def update_vacancies():
     """Обновляет зарплату для тестовых вакансий"""

@@ -6,6 +6,7 @@
 import os
 from pyspark.sql import SparkSession
 from dotenv import load_dotenv
+from pyspark.sql import functions as F
 
 def delete_test_vacancies():
     """Удаляет тестовые вакансии"""
