@@ -8,7 +8,7 @@ import sys
 import json
 from datetime import datetime
 from pyspark.sql import SparkSession, functions as F
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DateType
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DateType, ArrayType
 from dotenv import load_dotenv
 
 def create_spark_session():
@@ -17,45 +17,46 @@ def create_spark_session():
         .appName("HH Vacancies Processor") \
         .config("spark.driver.extraJavaOptions", "-Dfile.encoding=UTF-8") \
         .config("spark.executor.extraJavaOptions", "-Dfile.encoding=UTF-8") \
-        .config("spark.jars", "../lib/postgresql-42.7.4.jar") \
+        .config("spark.jars", "lib/postgresql-42.7.4.jar") \
         .getOrCreate()
 
-def extract_skills(description):
-    """Извлекает ключевые навыки из описания"""
-    if not description:
+def extract_skills(key_skills):
+    """Извлекает названия навыков из массива"""
+    if not key_skills:
         return []
-    
+
     skills = []
-    description_lower = description.lower()
-    
-    skill_patterns = {
-        'docker': 'Docker',
-        'kubernetes': 'Kubernetes',
-        'aws': 'AWS',
-        'python': 'Python',
-        'ansible': 'Ansible',
-        'terraform': 'Terraform',
-        'jenkins': 'Jenkins',
-        'gitlab': 'GitLab',
-        'bash': 'Bash',
-        'linux': 'Linux'
-    }
-    
-    for pattern, skill_name in skill_patterns.items():
-        if pattern in description_lower:
-            skills.append(skill_name)
-    
+    for skill in key_skills:
+        if hasattr(skill, 'name'):
+            skills.append(skill.name)
+        elif isinstance(skill, dict) and 'name' in skill:
+            skills.append(skill['name'])
+        elif isinstance(skill, str):
+            skills.append(skill)
+
     return skills
 
 def normalize_salary(salary_data):
     """Нормализует зарплату к RUB"""
     if not salary_data:
         return None
-    
+
     try:
-        currency = salary_data.get('currency', '').upper()
-        salary_from = salary_data.get('from')
-        salary_to = salary_data.get('to')
+        # Для Row объектов Spark используем атрибуты или индексы
+        if hasattr(salary_data, 'currency'):
+            currency = salary_data.currency.upper() if salary_data.currency else ''
+        else:
+            currency = str(salary_data.get('currency', '')).upper()
+
+        if hasattr(salary_data, 'from'):
+            salary_from = salary_data['from']  # 'from' является ключевым словом, используем индекс
+        else:
+            salary_from = salary_data.get('from')
+
+        if hasattr(salary_data, 'to'):
+            salary_to = salary_data.to
+        else:
+            salary_to = salary_data.get('to')
         
         # Курсы валют (упрощенные)
         exchange_rates = {
@@ -90,8 +91,10 @@ def main(input_file):
     
     print(f"Обработка файла: {input_file}")
     
-    # Загружаем переменные окружения
-    load_dotenv('../.env')
+    # Загружаем переменные окружения (если файл существует)
+    env_path = '.env'
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
     
     # Создаем сессию Spark
     spark = create_spark_session()
@@ -115,10 +118,10 @@ def main(input_file):
             StructField("to", IntegerType(), True),
             StructField("currency", StringType(), True)
         ]), True),
-        StructField("snippet", StructType([
-            StructField("requirement", StringType(), True),
-            StructField("responsibility", StringType(), True)
-        ]), True),
+        StructField("description", StringType(), True),
+        StructField("key_skills", ArrayType(StructType([
+            StructField("name", StringType(), True)
+        ])), True),
         StructField("published_at", StringType(), True)
     ])
     
@@ -134,18 +137,8 @@ def main(input_file):
         F.col("name").alias("title"),
         F.col("area.name").alias("city"),
         normalize_salary_udf(F.col("salary")).alias("salary_rub"),
-        F.concat(
-            F.coalesce(F.col("snippet.requirement"), F.lit("")),
-            F.lit(" "),
-            F.coalesce(F.col("snippet.responsibility"), F.lit(""))
-        ).alias("description"),
-        extract_skills_udf(
-            F.concat(
-                F.coalesce(F.col("snippet.requirement"), F.lit("")),
-                F.lit(" "),
-                F.coalesce(F.col("snippet.responsibility"), F.lit(""))
-            )
-        ).alias("skills"),
+        F.regexp_replace(F.col("description"), "<[^>]+>", "").alias("description"),  # Убираем HTML теги
+        extract_skills_udf(F.col("key_skills")).alias("skills"),
         F.to_date(F.col("published_at")).alias("published_date"),
         F.current_timestamp().alias("processed_at")
     ).filter(F.col("vacancy_id").isNotNull())
@@ -166,13 +159,53 @@ def main(input_file):
     }
     
     print(f"Запись данных в PostgreSQL: {db_url}")
-    
-    # Записываем данные
+
+    # Создаем временную таблицу для новых данных
+    temp_table = "vacancies_temp"
     processed_df.write \
-        .mode("append") \
-        .jdbc(db_url, "vacancies", properties=db_properties)
-    
-    print("Данные успешно записаны в таблицу 'vacancies'")
+        .mode("overwrite") \
+        .jdbc(db_url, temp_table, properties=db_properties)
+
+    # Выполняем UPSERT через прямое подключение к PostgreSQL
+    import psycopg2
+
+    conn = psycopg2.connect(
+        host=os.getenv('DB_HOST', 'localhost'),
+        port=os.getenv('DB_PORT', '5432'),
+        database=os.getenv('DB_NAME', 'hh_vacancies'),
+        user=os.getenv('DB_USER', 'postgres'),
+        password=os.getenv('DB_PASSWORD', 'postgres')
+    )
+
+    try:
+        with conn.cursor() as cursor:
+            # Вставляем данные с обработкой конфликтов
+            cursor.execute("""
+                INSERT INTO vacancies (vacancy_id, title, city, salary_rub, description, skills, published_date, processed_at)
+                SELECT vacancy_id, title, city, salary_rub, description, skills, published_date, processed_at
+                FROM vacancies_temp
+                ON CONFLICT (vacancy_id) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    city = EXCLUDED.city,
+                    salary_rub = EXCLUDED.salary_rub,
+                    description = EXCLUDED.description,
+                    skills = EXCLUDED.skills,
+                    published_date = EXCLUDED.published_date,
+                    processed_at = EXCLUDED.processed_at
+            """)
+
+            # Удаляем временную таблицу
+            cursor.execute("DROP TABLE IF EXISTS vacancies_temp")
+
+            conn.commit()
+            print(f"Данные успешно обновлены в таблице 'vacancies'. Затронуто строк: {cursor.rowcount}")
+
+    except Exception as e:
+        conn.rollback()
+        print(f"Ошибка при записи в базу данных: {e}")
+        raise
+    finally:
+        conn.close()
     
     # Останавливаем Spark
     spark.stop()
