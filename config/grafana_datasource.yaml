@@ -1,0 +1,16 @@
+apiVersion: 1
+
+datasources:
+  - name: PostgreSQL
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    database: hh_vacancies
+    user: postgres
+    secureJsonData:
+      password: "postgres"
+    jsonData:
+      sslmode: "disable"
+      postgresVersion: 1500
+      timescaledb: false
+    editable: true

@@ -1,0 +1,110 @@
+name: Deploy to Test Server
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:  # Ручной запуск
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test-and-lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pylint pytest
+        
+    - name: Lint with pylint
+      run: |
+        pylint scripts/ --exit-zero
+        
+    - name: Run tests
+      run: |
+        cd tests
+        python -m pytest test_processor.py -v
+
+  build-and-deploy:
+    needs: test-and-lint
+    runs-on: ubuntu-latest
+    if: success()
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Login to DockerHub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+        
+    - name: Build and push Docker images
+      run: |
+        docker-compose -f docker-compose.prod.yml build
+        docker-compose -f docker-compose.prod.yml push
+        
+    - name: Deploy to test server
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          set -e
+          echo "🚀 Начинаем деплой..."
+          
+          # Переходим в директорию проекта
+          cd ${{ secrets.SERVER_PROJECT_PATH }}
+          
+          # Получаем последние изменения
+          git fetch origin
+          git reset --hard origin/main
+          
+          # Останавливаем старые контейнеры
+          docker-compose -f docker-compose.prod.yml down
+          
+          # Пуллим новые образы
+          docker-compose -f docker-compose.prod.yml pull
+          
+          # Запускаем новые контейнеры
+          docker-compose -f docker-compose.prod.yml up -d --build
+          
+          # Ждем запуска сервисов
+          sleep 30
+          
+          # Проверяем работоспособность
+          echo "🔍 Проверка работоспособности..."
+          python3 scripts/deploy/health-check.py
+          
+          echo "✅ Деплой успешно завершен!"
+          
+    - name: Rollback on failure
+      if: failure()
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          echo "🔄 Откат к предыдущей версии..."
+          cd ${{ secrets.SERVER_PROJECT_PATH }}
+          docker-compose -f docker-compose.prod.yml down
+          docker-compose -f docker-compose.prod.yml up -d
+          echo "✅ Откат выполнен"
