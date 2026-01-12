@@ -28,19 +28,25 @@ def test_normalize_salary():
     print("✓ test_normalize_salary пройден")
 
 def test_extract_skills():
-    """Тест извлечения навыков"""
-    # Тест с несколькими навыками
-    description = "Требуется знание Docker и Kubernetes. Python будет плюсом."
-    skills = extract_skills(description)
+    """Тест извлечения навыков из данных HH API"""
+    # Тест с массивом словарей (имитация данных от HH)
+    mock_skills_data = [
+        {'name': 'Docker'},
+        {'name': 'Kubernetes'},
+        {'name': 'Python'}
+    ]
+    skills = extract_skills(mock_skills_data)
     assert 'Docker' in skills
     assert 'Kubernetes' in skills
     assert 'Python' in skills
     assert len(skills) == 3
     
-    # Тест без навыков
-    assert extract_skills("Обычное описание") == []
-    assert extract_skills("") == []
+    # Тест с пустым массивом
+    assert extract_skills([]) == []
     assert extract_skills(None) == []
+    
+    # Тест с массивом строк (если навык пришел как строка)
+    assert extract_skills(['Linux', 'Bash']) == ['Linux', 'Bash']
     
     print("✓ test_extract_skills пройден")
 
