@@ -3,38 +3,37 @@ name: Scheduled ETL Pipeline
 on:
   schedule:
     - cron: '0 2 * * *'  # Ежедневно в 02:00 UTC
-  workflow_dispatch:  # Ручной запуск
+  workflow_dispatch:
 
 jobs:
   run-etl:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
-      
+      uses: actions/checkout@v4
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.9'
-        
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        
+
     - name: Set up environment
       run: |
         cp .env.example .env
-        # В реальном проекте используйте GitHub Secrets
         echo "DB_HOST=localhost" >> .env
         echo "DB_PORT=5432" >> .env
-        
+
     - name: Run data collection
       run: |
         cd scripts
         python hh_collector.py
-        
+
     - name: Run Spark processing
       run: |
         cd scripts
@@ -44,12 +43,11 @@ jobs:
         else
           echo "No data files found"
         fi
-        
+
     - name: Upload results
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: processed-data
-        path: |
-          raw_data/
+        path: raw_data/
         retention-days: 7
