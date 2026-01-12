@@ -17,6 +17,7 @@ def create_spark_session():
         .appName("HH Vacancies Processor") \
         .config("spark.driver.extraJavaOptions", "-Dfile.encoding=UTF-8") \
         .config("spark.executor.extraJavaOptions", "-Dfile.encoding=UTF-8") \
+        .config("spark.jars", "../lib/postgresql-42.7.4.jar") \
         .getOrCreate()
 
 def extract_skills(description):

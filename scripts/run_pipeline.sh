@@ -7,18 +7,18 @@ set -e
 echo "Запуск ETL-пайплайна..."
 
 # Загружаем переменные окружения
-if [ -f ../.env ]; then
-    export $(cat ../.env | grep -v '^#' | xargs)
-else
-    echo "Предупреждение: .env файл не найден, используем значения по умолчанию"
-fi
+#if [ -f ../.env ]; then
+#    export $(cat ../.env | grep -v '^#' | xargs)
+#else
+#    echo "Предупреждение: .env файл не найден, используем значения по умолчанию"
+#fi
 
 # Создаем директорию для сырых данных
 mkdir -p ../raw_data
 
 # Шаг 1: Сбор данных с hh.ru
 echo "Сбор данных с hh.ru..."
-python hh_collector.py
+source ../venv/bin/activate && python3 hh_collector.py && deactivate
 
 # Находим последний собранный файл
 LATEST_FILE=$(ls -t ../raw_data/vacancies_*.json 2>/dev/null | head -1)
@@ -32,6 +32,6 @@ echo "Обработка файла: $LATEST_FILE"
 
 # Шаг 2: Обработка данных с помощью Spark
 echo "Обработка данных с помощью Spark..."
-python spark_processor.py "$LATEST_FILE"
+source ../venv/bin/activate && python3 spark_processor.py "$LATEST_FILE" && deactivate
 
 echo "ETL-пайплайн успешно завершен!"

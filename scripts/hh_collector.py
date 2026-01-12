@@ -18,23 +18,22 @@ def fetch_hh_vacancies():
     # Параметры запроса
     params = {
         'text': 'DevOps',
-        'area': os.getenv('HH_AREA', '113'),  # Ростов-на-Дону
-        'per_page': 100,  # Максимальное количество на страницу
-        'period': 3,  # За последние 3 дня
-        'only_with_salary': False
+        'per_page': 10
     }
     
     # Заголовки
     headers = {
-        'User-Agent': 'devops-analysis/1.0 (email@example.com)',
-        'HH-User-Agent': 'devops-analysis/1.0 (email@example.com)'
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7'
     }
     
     vacancies = []
     
     try:
-        print(f"Запрос вакансий для региона: {params['area']}")
-        
+        area = params.get('area', 'все регионы')
+        print(f"Запрос вакансий для региона: {area}")
+
         # Делаем запрос к API
         response = requests.get(
             'https://api.hh.ru/vacancies',
@@ -78,7 +77,7 @@ def save_vacancies(vacancies):
     if not vacancies:
         print("Нет данных для сохранения")
         return None
-    
+
     # Создаем имя файла с датой
     current_date = datetime.now().strftime('%Y%m%d_%H%M%S')
     filename = f'../raw_data/vacancies_{current_date}.json'
